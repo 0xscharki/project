@@ -19,17 +19,19 @@ export const routerV2Abi = [
 ];
 
 // Token addresses
-export const TOKEN_A = "0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794"; // HOG
-export const TOKEN_B = "0xB3804bF38bD170ef65b4De8536d19a8e3600C0A9"; // OS
+export const HOG = "0xB3804bF38bD170ef65b4De8536d19a8e3600C0A9";
+export const GHOG = "0x0e899dA2aD0817ed850ce68f7f489688E4D42D9D";
+export const OS = "0xb1e25689D55734FD3ffFc939c4C3Eb52DFf8A794";
 
-// Contract addresses
-export const LP_TOKEN_CONTRACT = "0x784DD93F3c42DCbF88D45E6ad6D3CC20dA169a60";
+// LP Token addresses
+export const HOG_OS_LP = "0x784DD93F3c42DCbF88D45E6ad6D3CC20dA169a60";
+export const GHOG_OS_LP = "0xD1CB1622a50506F0fDdf329CB857a0935C7FbbF9";
 export const ROUTER_V2_CONTRACT = "0xF5F7231073b3B41c04BA655e1a7438b1a7b29c27";
 
 // Get contract instances
-export const getLpTokenContract = (provider: ethers.Provider, signer?: ethers.Signer) => {
+export const getLpTokenContract = (lpAddress: string, provider: ethers.Provider, signer?: ethers.Signer) => {
   return new ethers.Contract(
-    LP_TOKEN_CONTRACT,
+    lpAddress,
     lpTokenAbi,
     signer || provider
   );

@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { ethers } from 'ethers';
 import { useWallet } from '../hooks/useWallet';
 import { 
   getLpTokenContract, 
   getRouterV2Contract, 
   getDeadlineTimestamp,
-  LP_TOKEN_CONTRACT,
   ROUTER_V2_CONTRACT,
-  TOKEN_A,
-  TOKEN_B
+  HOG,
+  GHOG,
+  OS,
+  HOG_OS_LP,
+  GHOG_OS_LP
 } from '../utils/contracts';
 import toast from 'react-hot-toast';
 import { Settings, Loader2, Info } from 'lucide-react';
@@ -16,16 +17,22 @@ import { Settings, Loader2, Info } from 'lucide-react';
 // Available slippage options
 const SLIPPAGE_OPTIONS = [0.5, 1, 2, 5, 10];
 
+type LpType = 'HOG-OS' | 'GHOG-OS';
+
 const ContractInteraction: React.FC = () => {
   // Wallet state
   const { signer, provider, account, isConnected, connectWallet } = useWallet();
   
+  // LP Type selection
+  const [selectedLp, setSelectedLp] = useState<LpType>('HOG-OS');
+  
   // Data states
-  const [lpBalance, setLpBalance] = useState<string>('');
+  const [lpBalances, setLpBalances] = useState<Record<LpType, string>>({
+    'HOG-OS': '',
+    'GHOG-OS': ''
+  });
   const [estimatedAmounts, setEstimatedAmounts] = useState<{amountA: string, amountB: string} | null>(null);
   const [minAmounts, setMinAmounts] = useState<{amountAMin: string, amountBMin: string} | null>(null);
-  const [deadline, setDeadline] = useState<number>(0);
-  
   // UI states
   const [showSettings, setShowSettings] = useState<boolean>(false);
   
@@ -39,31 +46,45 @@ const ContractInteraction: React.FC = () => {
   const [isApproving, setIsApproving] = useState<boolean>(false);
   const [isProcessingLiquidity, setIsProcessingLiquidity] = useState<boolean>(false);
 
-  // Check LP balance when account changes
+  // Check LP balances when account changes or LP type is switched
   useEffect(() => {
     if (account && provider && isConnected) {
-      checkLpBalance();
+      checkLpBalances();
     }
   }, [account, provider, isConnected]);
 
-  // Set deadline when needed
-  useEffect(() => {
-    setDeadline(getDeadlineTimestamp(10)); // 10 minutes from now
-  }, []);
+  const getCurrentLpAddress = () => {
+    return selectedLp === 'HOG-OS' ? HOG_OS_LP : GHOG_OS_LP;
+  };
 
-  // Check LP balance
-  const checkLpBalance = async () => {
+  const getCurrentTokens = () => {
+    return selectedLp === 'HOG-OS' 
+      ? { tokenA: HOG, tokenB: OS }
+      : { tokenA: GHOG, tokenB: OS };
+  };
+
+  // Check LP balances
+  const checkLpBalances = async () => {
     if (!provider || !account) return;
 
     try {
-      const lpTokenContract = getLpTokenContract(provider);
-      const balance = await lpTokenContract.balanceOf(account);
+      // Check HOG-OS balance
+      const hogOsContract = getLpTokenContract(HOG_OS_LP, provider);
+      const hogOsBalance = await hogOsContract.balanceOf(account);
       
-      setLpBalance(balance.toString());
+      // Check GHOG-OS balance
+      const ghogOsContract = getLpTokenContract(GHOG_OS_LP, provider);
+      const ghogOsBalance = await ghogOsContract.balanceOf(account);
       
-      // If we have a balance, get estimated amounts
-      if (balance.toString() !== '0') {
-        fetchEstimatedAmounts(balance.toString());
+      setLpBalances({
+        'HOG-OS': hogOsBalance.toString(),
+        'GHOG-OS': ghogOsBalance.toString()
+      });
+      
+      // Get estimated amounts for currently selected LP if it has balance
+      const currentBalance = selectedLp === 'HOG-OS' ? hogOsBalance : ghogOsBalance;
+      if (currentBalance.toString() !== '0') {
+        fetchEstimatedAmounts(currentBalance.toString());
       }
     } catch (error) {
       console.error('Error checking LP balance:', error);
@@ -76,10 +97,11 @@ const ContractInteraction: React.FC = () => {
 
     try {
       const routerContract = getRouterV2Contract(provider);
+      const { tokenA, tokenB } = getCurrentTokens();
       
       const estimate = await routerContract.quoteRemoveLiquidity(
-        TOKEN_A,
-        TOKEN_B,
+        tokenA,
+        tokenB,
         true, // stable
         balance
       );
@@ -122,7 +144,7 @@ const ContractInteraction: React.FC = () => {
 
     try {
       setIsClaimingFees(true);
-      const lpTokenContract = getLpTokenContract(provider, signer);
+      const lpTokenContract = getLpTokenContract(getCurrentLpAddress(), provider, signer);
       
       const tx = await lpTokenContract.claimFees();
       toast.loading('Claiming fees...', { id: 'claim-fees' });
@@ -130,8 +152,8 @@ const ContractInteraction: React.FC = () => {
       await tx.wait();
       toast.success('Fees claimed successfully!', { id: 'claim-fees' });
       
-      // Refresh LP balance
-      checkLpBalance();
+      // Refresh LP balances
+      checkLpBalances();
     } catch (error) {
       console.error('Error claiming fees:', error);
       toast.error(
@@ -145,16 +167,16 @@ const ContractInteraction: React.FC = () => {
 
   // Approve LP tokens
   const handleApprove = async () => {
-    if (!provider || !signer || !lpBalance) {
+    if (!provider || !signer || !lpBalances[selectedLp]) {
       toast.error('Please connect your wallet first');
       return;
     }
 
     try {
       setIsApproving(true);
-      const lpTokenContract = getLpTokenContract(provider, signer);
+      const lpTokenContract = getLpTokenContract(getCurrentLpAddress(), provider, signer);
       
-      const tx = await lpTokenContract.approve(ROUTER_V2_CONTRACT, lpBalance);
+      const tx = await lpTokenContract.approve(ROUTER_V2_CONTRACT, lpBalances[selectedLp]);
       toast.loading('Approving LP tokens...', { id: 'approve' });
       
       await tx.wait();
@@ -173,7 +195,7 @@ const ContractInteraction: React.FC = () => {
 
   // Remove liquidity
   const handleRemoveLiquidity = async () => {
-    if (!provider || !signer || !account || !lpBalance || !minAmounts) {
+    if (!provider || !signer || !account || !lpBalances[selectedLp] || !minAmounts) {
       toast.error('Please connect your wallet and have LP tokens to remove');
       return;
     }
@@ -181,15 +203,17 @@ const ContractInteraction: React.FC = () => {
     try {
       setIsProcessingLiquidity(true);
       const routerContract = getRouterV2Contract(provider, signer);
+      const { tokenA, tokenB } = getCurrentTokens();
+      const currentBalance = lpBalances[selectedLp];
       
       // Need to refresh deadline to ensure it's in the future
       const currentDeadline = getDeadlineTimestamp(10);
       
       const tx = await routerContract.removeLiquidity(
-        TOKEN_A,
-        TOKEN_B,
+        tokenA,
+        tokenB,
         true, // stable
-        lpBalance,
+        currentBalance,
         minAmounts.amountAMin,
         minAmounts.amountBMin,
         account, // to (your wallet address)
@@ -201,11 +225,10 @@ const ContractInteraction: React.FC = () => {
       
       toast.success('Liquidity removed successfully!', { id: 'remove-liquidity' });
       
-      // Reset amounts and check balance again
-      setLpBalance('');
+      // Reset amounts and check balances again
       setEstimatedAmounts(null);
       setMinAmounts(null);
-      setTimeout(() => checkLpBalance(), 2000);
+      setTimeout(() => checkLpBalances(), 2000);
       
     } catch (error) {
       console.error('Error removing liquidity:', error);
@@ -262,7 +285,7 @@ const ContractInteraction: React.FC = () => {
         return (Number(num) / 1e18).toFixed(6);
       }
       return num.toString();
-    } catch (e) {
+    } catch {
       return value;
     }
   };
@@ -276,17 +299,38 @@ const ContractInteraction: React.FC = () => {
     console.log("Signer:", signer ? "Available" : "Not available");
   }, [account, isConnected, provider, signer]);
 
-  // For debugging - force component to render
-  const [forceRender, setForceRender] = useState<number>(0);
-  
   // Always show the main UI - don't gate on wallet connection
   // We'll disable buttons as needed instead
   const walletReady = Boolean(account && isConnected);
 
   return (
     <div className="max-w-md p-6 mx-auto bg-white rounded-lg shadow-md">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col gap-4 mb-6">
         <h2 className="text-xl font-semibold">Claim Fees & Unpair V2</h2>
+        
+        {/* LP Type Selector */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSelectedLp('HOG-OS')}
+            className={`px-4 py-2 rounded-md ${
+              selectedLp === 'HOG-OS'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+            }`}
+          >
+            HOG-OS
+          </button>
+          <button
+            onClick={() => setSelectedLp('GHOG-OS')}
+            className={`px-4 py-2 rounded-md ${
+              selectedLp === 'GHOG-OS'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+            }`}
+          >
+            GHOG-OS
+          </button>
+        </div>
         
         <button 
           onClick={() => setShowSettings(!showSettings)}
@@ -312,7 +356,7 @@ const ContractInteraction: React.FC = () => {
           <>
             <div className="flex justify-between mb-1">
               <span className="text-sm text-gray-600">Your LP Balance:</span>
-              <span className="font-medium">{lpBalance ? formatNumber(lpBalance) : '0'}</span>
+              <span className="font-medium">{lpBalances[selectedLp] ? formatNumber(lpBalances[selectedLp]) : '0'}</span>
             </div>
             
             {estimatedAmounts && (
@@ -402,7 +446,7 @@ const ContractInteraction: React.FC = () => {
         </button>
         
         {/* Approve Button - only show if we have LP balance */}
-        {lpBalance && lpBalance !== '0' && (
+        {lpBalances[selectedLp] && lpBalances[selectedLp] !== '0' && (
           <button
             onClick={handleApprove}
             disabled={isApproving}
@@ -420,7 +464,7 @@ const ContractInteraction: React.FC = () => {
         )}
         
         {/* Remove Liquidity Button - only show if we have LP balance */}
-        {lpBalance && lpBalance !== '0' && (
+        {lpBalances[selectedLp] && lpBalances[selectedLp] !== '0' && (
           <button
             onClick={handleRemoveLiquidity}
             disabled={isProcessingLiquidity}
@@ -446,8 +490,8 @@ const ContractInteraction: React.FC = () => {
         </h3>
         <div className="grid grid-cols-1 gap-1">
           <div className="flex flex-col">
-            <span className="text-xs text-gray-500">LP Token Contract:</span>
-            <span className="font-mono text-xs break-all">{LP_TOKEN_CONTRACT}</span>
+            <span className="text-xs text-gray-500">Current LP Token Contract:</span>
+            <span className="font-mono text-xs break-all">{getCurrentLpAddress()}</span>
           </div>
           <div className="flex flex-col">
             <span className="text-xs text-gray-500">Router V2 Contract:</span>
